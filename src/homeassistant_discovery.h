@@ -107,7 +107,7 @@ private:
                                  std::string_view icon = "",
                                  std::string_view value_template = "");
     };
-    static std::unordered_map<std::string_view, std::function<DeviceData*()>> device_factory_functions;
+    static std::unordered_map<std::string_view, std::function<std::unique_ptr<DeviceData>()>> device_factory_functions;
 
     struct TemperatureDevice : DeviceData {
         std::pair<std::string, std::string> getNameAndModel(const std::unordered_map<std::string, std::unordered_map<std::string, Item>> &all_items) override;
@@ -167,9 +167,9 @@ private:
     // Helper methods
     bool isServiceEnabled(const std::string& service_type) const;
     std::string createDeviceDiscoveryTopic(const std::string &device_id) const;
-    DeviceData *createDeviceData(const std::string &service,
-                                 const ShortServiceName &short_service_name,
-                                 const std::unordered_map<std::string, std::unordered_map<std::string, Item>> &all_items) const;
+    std::unique_ptr<HomeAssistantDiscovery::DeviceData> createDeviceData(const std::string &service,
+                                                                         const ShortServiceName &short_service_name,
+                                                                         const std::unordered_map<std::string, std::unordered_map<std::string, Item>> &all_items) const;
 public:
     HomeAssistantDiscovery();
     ~HomeAssistantDiscovery() = default;

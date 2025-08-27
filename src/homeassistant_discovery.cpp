@@ -79,16 +79,16 @@ static std::string toIdentifier(std::string_view input)
     return result;
 }
 
-std::unordered_map<std::string_view, std::function<HomeAssistantDiscovery::DeviceData*()>> HomeAssistantDiscovery::device_factory_functions = {
-    {"temperature", []() { return new HomeAssistantDiscovery::TemperatureDevice(); }},
-    {"battery", []() { return new HomeAssistantDiscovery::BatteryDevice(); }},
-    {"solarcharger", []() { return new HomeAssistantDiscovery::SolarChargerDevice(); }},
-    {"vebus", []() { return new HomeAssistantDiscovery::VeBusDevice(); }},
-    {"system", []() { return new HomeAssistantDiscovery::SystemDevice(); }},
-    {"tank", []() { return new HomeAssistantDiscovery::TankDevice(); }},
-    {"grid", []() { return new HomeAssistantDiscovery::GridMeterDevice(); }},
-    {"switch", []() { return new HomeAssistantDiscovery::SwitchDevice(); }},
-    {"meteo", []() { return new HomeAssistantDiscovery::MeteoDevice(); }}
+std::unordered_map<std::string_view, std::function<std::unique_ptr<HomeAssistantDiscovery::DeviceData>()>> HomeAssistantDiscovery::device_factory_functions = {
+    {"temperature", []() { return std::make_unique<HomeAssistantDiscovery::TemperatureDevice>(); }},
+    {"battery", []() { return std::make_unique<HomeAssistantDiscovery::BatteryDevice>(); }},
+    {"solarcharger", []() { return std::make_unique<HomeAssistantDiscovery::SolarChargerDevice>(); }},
+    {"vebus", []() { return std::make_unique<HomeAssistantDiscovery::VeBusDevice>(); }},
+    {"system", []() { return std::make_unique<HomeAssistantDiscovery::SystemDevice>(); }},
+    {"tank", []() { return std::make_unique<HomeAssistantDiscovery::TankDevice>(); }},
+    {"grid", []() { return std::make_unique<HomeAssistantDiscovery::GridMeterDevice>(); }},
+    {"switch", []() { return std::make_unique<HomeAssistantDiscovery::SwitchDevice>(); }},
+    {"meteo", []() { return std::make_unique<HomeAssistantDiscovery::MeteoDevice>(); }}
 };
 
 void HomeAssistantDiscovery::DeviceData::addNumericDiagnostic(std::string_view dbus_path,
@@ -1261,11 +1261,11 @@ std::string HomeAssistantDiscovery::createDeviceDiscoveryTopic(const std::string
     return discovery_prefix + "/device/" + device_id + "/config";
 }
 
-HomeAssistantDiscovery::DeviceData *HomeAssistantDiscovery::createDeviceData(const std::string &service,
-                                                                             const ShortServiceName &short_service_name,
-                                                                             const std::unordered_map<std::string, std::unordered_map<std::string, Item>> &all_items) const
+std::unique_ptr<HomeAssistantDiscovery::DeviceData> HomeAssistantDiscovery::createDeviceData(const std::string &service,
+                                                                                             const ShortServiceName &short_service_name,
+                                                                                             const std::unordered_map<std::string, std::unordered_map<std::string, Item>> &all_items) const
 {
-    DeviceData *device = device_factory_functions[short_service_name.service_type]();
+    std::unique_ptr<DeviceData> device = device_factory_functions[short_service_name.service_type]();
 
     device->service = service;
     device->short_service_name = short_service_name;
@@ -1296,9 +1296,7 @@ void HomeAssistantDiscovery::publishSensorEntitiesWithItems(const std::string &s
         }
 
         flashmq_logf(LOG_DEBUG, "No device found for service %s, creating new device", service.c_str());
-
-        DeviceData *d = createDeviceData(service, short_service_name, all_items);
-        auto [device, result] = devices.insert({service, std::unique_ptr<DeviceData>(d)});
+        auto [device, result] = devices.insert({service, createDeviceData(service, short_service_name, all_items)});
         flashmq_publish_message(device->second->discovery_topic, 0, true, device->second->cached_payload);
     } else {
         flashmq_logf(LOG_DEBUG, "Updating existing device for service %s", service.c_str());
