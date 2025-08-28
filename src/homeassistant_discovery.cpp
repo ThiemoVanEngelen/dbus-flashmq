@@ -1197,7 +1197,7 @@ HomeAssistantDiscovery::HomeAssistantDiscovery()
 void HomeAssistantDiscovery::setEnabled(bool enable)
 {
     enabled = enable;
-    flashmq_logf(LOG_INFO, "Home Assistant Discovery %s", enabled ? "enabled" : "disabled");
+    flashmq_logf(LOG_NOTICE, "Home Assistant Discovery %s", enabled ? "enabled" : "disabled");
 }
 
 bool HomeAssistantDiscovery::isEnabled() const
@@ -1208,7 +1208,7 @@ bool HomeAssistantDiscovery::isEnabled() const
 void HomeAssistantDiscovery::setDiscoveryPrefix(const std::string &prefix)
 {
     discovery_prefix = prefix;
-    flashmq_logf(LOG_DEBUG, "Home Assistant Discovery prefix set to: %s", prefix.c_str());
+    flashmq_logf(LOG_NOTICE, "Home Assistant Discovery prefix set to: %s", prefix.c_str());
 }
 
 const std::string &HomeAssistantDiscovery::getDiscoveryPrefix() const
@@ -1219,7 +1219,7 @@ const std::string &HomeAssistantDiscovery::getDiscoveryPrefix() const
 void HomeAssistantDiscovery::setVrmId(const std::string &vrm_id)
 {
     this->vrm_id = vrm_id;
-    flashmq_logf(LOG_DEBUG, "Home Assistant Discovery VRM ID set to: %s", vrm_id.c_str());
+    flashmq_logf(LOG_NOTICE, "Home Assistant Discovery VRM ID set to: %s", vrm_id.c_str());
 }
 
 void HomeAssistantDiscovery::setEnabledServices(const std::vector<std::string>& services)
@@ -1249,6 +1249,12 @@ void HomeAssistantDiscovery::setEnabledServices(const std::vector<std::string>& 
         }
         flashmq_logf(LOG_DEBUG, "Home Assistant Discovery enabled for all supported services");
     }
+
+    std::string all_services = std::accumulate(enabled_services.begin(), enabled_services.end(), std::string(),
+                                               [](const std::string &a, const std::string &b) {
+                                                   return a.empty() ? b : a + ", " + b;
+                                               });
+    flashmq_logf(LOG_NOTICE, "Home Assistant Discovery supported services: %s", all_services.c_str());
 }
 
 bool HomeAssistantDiscovery::isServiceEnabled(const std::string& service_type) const
