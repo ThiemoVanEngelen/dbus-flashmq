@@ -1085,6 +1085,7 @@ void State::configure_home_assistant_discovery(const std::unordered_map<std::str
             flashmq_logf(LOG_INFO, "Home Assistant Discovery enabled for services: %s", services_pos->second.c_str());
         } else {
             flashmq_logf(LOG_INFO, "Home Assistant Discovery enabled for all supported services");
+            ha_discovery.setEnabledServices(std::vector<std::string>());
         }
 
         flashmq_logf(LOG_INFO, "Home Assistant Discovery enabled with prefix: %s",
