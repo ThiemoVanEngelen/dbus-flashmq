@@ -173,6 +173,8 @@ void HomeAssistantDiscovery::DeviceData::addCommonDiagnostics(const std::unorder
                             "{{ 'v%x' | format(value_json.value | int(default=0)) }}"
                             "{% endif %}"
                             );
+    if (service_items.contains("/DeviceOffReason"))
+        addStringDiagnostic("/DeviceOffReason", "Off Reason", "mdi:information-outline", DEVICE_OFF_REASON_VALUE_TEMPLATE);
 }
 
 void HomeAssistantDiscovery::MeteoDevice::addEntities(const std::unordered_map<std::string, std::unordered_map<std::string, Item>>& all_items)
@@ -842,14 +844,6 @@ void HomeAssistantDiscovery::DcDcDevice::addEntities(const std::unordered_map<st
         // Custom value template for state enum
         state_sensor.value_template = CHARGER_STATE_VALUE_TEMPLATE;
         entities.emplace("/State", std::move(state_sensor));
-    }
-    if (service_items.contains("/DeviceOffReason")) {
-        HAEntityConfig sensor;
-        sensor.name = "Off Reason";
-        sensor.icon = "mdi:information-outline";
-        // Custom value template for off reason bitfield
-        sensor.value_template = DEVICE_OFF_REASON_VALUE_TEMPLATE;
-        entities.emplace("/DeviceOffReason", std::move(sensor));
     }
     if (service_items.contains("/Mode"))
         addStringDiagnostic("/Mode", "Mode", "mdi:cog",
