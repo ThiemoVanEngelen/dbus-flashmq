@@ -160,6 +160,10 @@ private:
         std::pair<std::string, std::string> getNameAndModel(const std::unordered_map<std::string, std::unordered_map<std::string, Item>> &all_items) override;
         void addEntities(const std::unordered_map<std::string, std::unordered_map<std::string, Item>> &all_items) override;
     };
+    struct DcDcDevice : DeviceData {
+        std::pair<std::string, std::string> getNameAndModel(const std::unordered_map<std::string, std::unordered_map<std::string, Item>> &all_items) override;
+        void addEntities(const std::unordered_map<std::string, std::unordered_map<std::string, Item>> &all_items) override;
+    };
 
     std::string discovery_prefix = "homeassistant";
     std::string vrm_id;

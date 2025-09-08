@@ -22,6 +22,26 @@ static constexpr std::string_view CHARGER_STATE_VALUE_TEMPLATE = "{% set states 
                                                                  ", 252: 'Bulk protect'"
                                                                  "} %}{{ states[value_json.value] | default('Unknown (' + value_json.value|string + ')') }}";
 
+static constexpr std::string_view DEVICE_OFF_REASON_VALUE_TEMPLATE = "{% set value = value_json.value | int(0) %}"
+                                                                     "{% set reasons = [] %}"
+                                                                     "{% if value | bitwise_and(1) %}""{% set reasons = reasons + [\"No/Low input power\"] %}""{% endif %}"
+                                                                     "{% if value | bitwise_and(2) %}""{% set reasons = reasons + [\"Disabled by physical switch\"] %}""{% endif %}"
+                                                                     "{% if value | bitwise_and(4) %}""{% set reasons = reasons + [\"Remote via Device-mode or push-button\"] %}""{% endif %}"
+                                                                     "{% if value | bitwise_and(8) %}""{% set reasons = reasons + [\"Remote input connector\"] %}""{% endif %}"
+                                                                     "{% if value | bitwise_and(16) %}""{% set reasons = reasons + [\"Internal condition preventing startup\"] %}""{% endif %}"
+                                                                     "{% if value | bitwise_and(32) %}""{% set reasons = reasons + [\"Need token for operation\"] %}""{% endif %}"
+                                                                     "{% if value | bitwise_and(64) %}""{% set reasons = reasons + [\"Signal from BMS\"] %}""{% endif %}"
+                                                                     "{% if value | bitwise_and(128) %}""{% set reasons = reasons + [\"Engine shutdown on low input voltage\"] %}""{% endif %}"
+                                                                     "{% if value | bitwise_and(256) %}""{% set reasons = reasons + [\"Converter is off to read input voltage accurately\"] %}""{% endif %}"
+                                                                     "{% if value | bitwise_and(512) %}""{% set reasons = reasons + [\"Low temperature\"] %}""{% endif %}"
+                                                                     "{% if value | bitwise_and(1024) %}""{% set reasons = reasons + [\"no/low panel power\"] %}""{% endif %}"
+                                                                     "{% if value | bitwise_and(2048) %}""{% set reasons = reasons + [\"no/low battery power\"] %}""{% endif %}"
+                                                                     "{% if value | bitwise_and(4096) %}""{% set reasons = reasons + [\"Unknown (4096)\"] %}""{% endif %}"
+                                                                     "{% if value | bitwise_and(8192) %}""{% set reasons = reasons + [\"Unknown (8192)\"] %}""{% endif %}"
+                                                                     "{% if value | bitwise_and(16384) %}""{% set reasons = reasons + [\"Unknown (16384)\"] %}""{% endif %}"
+                                                                     "{% if value | bitwise_and(32768) %}""{% set reasons = reasons + [\"Active alarm\"] %}""{% endif %}"
+                                                                     "{{ reasons | join(\", \") if reasons else \"-\" }}";
+
 static constexpr std::string_view FLUID_TYPE_VALUE_TEMPLATE = "{% set types = "
                                                               "{ 0: 'Fuel'"
                                                               ", 1: 'Fresh water'"
@@ -90,6 +110,7 @@ std::unordered_map<std::string_view, std::function<std::unique_ptr<HomeAssistant
     {"switch", []() { return std::make_unique<HomeAssistantDiscovery::SwitchDevice>(); }},
     {"meteo", []() { return std::make_unique<HomeAssistantDiscovery::MeteoDevice>(); }},
     {"charger", []() { return std::make_unique<HomeAssistantDiscovery::ChargerDevice>(); }},
+    {"dcdc", []() { return std::make_unique<HomeAssistantDiscovery::DcDcDevice>(); }},
 };
 
 void HomeAssistantDiscovery::DeviceData::addNumericDiagnostic(std::string_view dbus_path,
@@ -745,6 +766,119 @@ std::pair<std::string, std::string> HomeAssistantDiscovery::ChargerDevice::getNa
     std::string model = getItemText(items, {"/ProductName"});
     if (model.empty()) {
         model = "AC Charger";
+    }
+
+    return {name, model};
+}
+
+void HomeAssistantDiscovery::DcDcDevice::addEntities(const std::unordered_map<std::string, std::unordered_map<std::string, Item>>& all_items)
+{
+    const auto& service_items = all_items.at(service);
+
+    if (service_items.contains("/Dc/0/Voltage")) {
+        HAEntityConfig bat_voltage;
+        bat_voltage.name = "Battery Voltage (Out)";
+        bat_voltage.device_class = "voltage";
+        bat_voltage.state_class = "measurement";
+        bat_voltage.unit_of_measurement = "V";
+        bat_voltage.icon = "mdi:battery-charging";
+        bat_voltage.suggested_display_precision = 2;
+        entities.emplace("/Dc/0/Voltage", std::move(bat_voltage));
+    }
+    if (service_items.contains("/Dc/0/Current")) {
+        HAEntityConfig bat_current;
+        bat_current.name = "Battery Current (Out)";
+        bat_current.device_class = "current";
+        bat_current.state_class = "measurement";
+        bat_current.unit_of_measurement = "A";
+        bat_current.icon = "mdi:battery-charging";
+        bat_current.suggested_display_precision = 2;
+        entities.emplace("/Dc/0/Current", std::move(bat_current));
+    }
+    if (service_items.contains("/Dc/0/Power")) {
+        HAEntityConfig power_sensor;
+        power_sensor.name = "Battery Power (Out)";
+        power_sensor.device_class = "power";
+        power_sensor.state_class = "measurement";
+        power_sensor.unit_of_measurement = "W";
+        power_sensor.icon = "mdi:flash";
+        power_sensor.suggested_display_precision = 1;
+        entities.emplace("/Dc/0/Power", std::move(power_sensor));
+    }
+    if (service_items.contains("/Dc/In/V")) {
+        HAEntityConfig bat_voltage;
+        bat_voltage.name = "Battery Voltage (In)";
+        bat_voltage.device_class = "voltage";
+        bat_voltage.state_class = "measurement";
+        bat_voltage.unit_of_measurement = "V";
+        bat_voltage.icon = "mdi:battery-charging";
+        bat_voltage.suggested_display_precision = 2;
+        entities.emplace("/Dc/In/V", std::move(bat_voltage));
+    }
+    if (service_items.contains("/Dc/In/I")) {
+        HAEntityConfig bat_current;
+        bat_current.name = "Battery Current (In)";
+        bat_current.device_class = "current";
+        bat_current.state_class = "measurement";
+        bat_current.unit_of_measurement = "A";
+        bat_current.icon = "mdi:battery-charging";
+        bat_current.suggested_display_precision = 2;
+        entities.emplace("/Dc/In/I", std::move(bat_current));
+    }
+    if (service_items.contains("/Dc/In/P")) {
+        HAEntityConfig power_sensor;
+        power_sensor.name = "Battery Power (In)";
+        power_sensor.device_class = "power";
+        power_sensor.state_class = "measurement";
+        power_sensor.unit_of_measurement = "W";
+        power_sensor.icon = "mdi:flash";
+        power_sensor.suggested_display_precision = 1;
+        entities.emplace("/Dc/In/P", std::move(power_sensor));
+    }
+    if (service_items.contains("/State")) {
+        HAEntityConfig state_sensor;
+        state_sensor.name = "Charge State";
+        state_sensor.icon = "mdi:battery-charging";
+        // Custom value template for state enum
+        state_sensor.value_template = CHARGER_STATE_VALUE_TEMPLATE;
+        entities.emplace("/State", std::move(state_sensor));
+    }
+    if (service_items.contains("/DeviceOffReason")) {
+        HAEntityConfig sensor;
+        sensor.name = "Off Reason";
+        sensor.icon = "mdi:information-outline";
+        // Custom value template for off reason bitfield
+        sensor.value_template = DEVICE_OFF_REASON_VALUE_TEMPLATE;
+        entities.emplace("/DeviceOffReason", std::move(sensor));
+    }
+    if (service_items.contains("/Mode"))
+        addStringDiagnostic("/Mode", "Mode", "mdi:cog",
+                            "{% set modes = {1: 'Charger Only', 2: 'Inverter Only', 3: 'On', 4: 'Off'} %}{{ modes[value_json.value] | default('Unknown (' + value_json.value|string + ')') }}");
+    if (service_items.contains("/Settings/DeviceFunction"))
+        addStringDiagnostic("/Settings/DeviceFunction", "Device function", "mdi:information",
+                            "{% if value_json.value is none %}"
+                            "Unknown"
+                            "{% elif value_json.value == 0 %}"
+                            "Charger"
+                            "{% elif value_json.value == 1 %}"
+                            "PSU"
+                            "{% else %}"
+                            "{{ value_json.value | string }}"
+                            "{% endif %}"
+                            );
+    addCommonDiagnostics(service_items);
+}
+std::pair<std::string, std::string> HomeAssistantDiscovery::DcDcDevice::getNameAndModel(const std::unordered_map<std::string, std::unordered_map<std::string, Item>>& all_items)
+{
+    const auto& items = all_items.at(service);
+    std::string name = getItemText(items, {"/CustomName"});
+    if (name.empty()) {
+        name = "DcDc Charger " + std::string(short_service_name.instance());
+    }
+
+    std::string model = getItemText(items, {"/ProductName"});
+    if (model.empty()) {
+        model = "DcDc Charger";
     }
 
     return {name, model};
