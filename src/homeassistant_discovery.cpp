@@ -1270,6 +1270,7 @@ void HomeAssistantDiscovery::SwitchDevice::addEntities(const std::unordered_map<
                 dimming_state.suggested_display_precision = 0;
 
                 dimming_state.command_topic = dbus_path;
+                dimming_state.command_template = "{\"value\": {{ value }} }";
                 dimming_state.min_value = 0;
                 dimming_state.max_value = 100;
                 dimming_state.unit_of_measurement = "%";
@@ -1351,6 +1352,7 @@ nlohmann::json HAEntityConfig::toJson() const
 
             // For number entities (dimmers)
             if (min_value != 0 || max_value != 0) { config_json["min"] = min_value; config_json["max"] = max_value; }
+            if (!command_template.empty()) { config_json["command_template"] = command_template; }
             if (!mode.empty()) { config_json["mode"] = mode; }
 
             config_json["optimistic"] = optimistic;

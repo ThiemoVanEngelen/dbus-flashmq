@@ -55,6 +55,7 @@ struct HAEntityConfig
     std::string state_off;
 
     std::string command_topic;
+    std::string command_template = "";
     std::string payload_on;
     std::string payload_off;
     bool optimistic = false;
