@@ -150,8 +150,17 @@ private:
         void addEntities(const std::unordered_map<std::string, std::unordered_map<std::string, Item>> &all_items) override;
     };
     struct SwitchDevice : DeviceData {
+        struct CustomNameInfo {
+            std::string custom_name_path;
+            std::string name_path;
+            HAEntityConfig *state_entity_config = nullptr;
+            HAEntityConfig *dimming_entity_config = nullptr;
+        };
+        std::unordered_map<std::string, CustomNameInfo> customname_paths;
         std::pair<std::string, std::string> getNameAndModel(const std::unordered_map<std::string, std::unordered_map<std::string, Item>> &all_items) override;
         void addEntities(const std::unordered_map<std::string, std::unordered_map<std::string, Item>> &all_items) override;
+        bool update(const std::unordered_map<std::string, std::unordered_map<std::string, Item>> &all_items,
+                    const std::unordered_map<std::string, Item> &changed_items) override;
     };
     struct MeteoDevice : DeviceData {
         std::pair<std::string, std::string> getNameAndModel(const std::unordered_map<std::string, std::unordered_map<std::string, Item>> &all_items) override;
