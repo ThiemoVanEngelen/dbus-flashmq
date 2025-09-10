@@ -1256,7 +1256,7 @@ void HomeAssistantDiscovery::SwitchDevice::addEntities(const std::unordered_map<
                 } else if (output_type == "pwm") {
                     switch_state.icon = "mdi:sine-wave";
                 } else if (output_type == "relay") {
-                    switch_state.icon = "mdi:relay";
+                    switch_state.icon = "mdi:electric-switch";
                 }
                 entities.emplace(dbus_path, std::move(switch_state));
             } else if (parts[2] == "Dimming" && output_type == "pwm") {
