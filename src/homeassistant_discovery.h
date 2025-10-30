@@ -66,6 +66,11 @@ struct HAEntityConfig
     nlohmann::json toJson() const;
 };
 
+struct HAAvahiClientWrapper {
+    virtual ~HAAvahiClientWrapper() = default;
+    virtual void poll_event_received(int fd, uint32_t events) = 0;
+};
+
 /**
  * @brief Home Assistant Discovery with generic sensor support
  */
@@ -181,9 +186,11 @@ private:
 
     std::string discovery_prefix = "homeassistant";
     std::string vrm_id;
+    bool initialised = false;
     bool enabled = false;
     std::unordered_set<std::string> enabled_services;
     std::unordered_map<std::string, std::unique_ptr<DeviceData>> devices; // service -> DeviceData
+    std::unique_ptr<HAAvahiClientWrapper> avahi_client_wrapper;
 
     // Helper methods
     bool isServiceEnabled(const std::string& service_type) const;
@@ -191,6 +198,8 @@ private:
     std::unique_ptr<HomeAssistantDiscovery::DeviceData> createDeviceData(const std::string &service,
                                                                          const ShortServiceName &short_service_name,
                                                                          const std::unordered_map<std::string, std::unordered_map<std::string, Item>> &all_items) const;
+    void clearAll();
+
 public:
     HomeAssistantDiscovery();
     ~HomeAssistantDiscovery() = default;
@@ -212,8 +221,9 @@ public:
     // Bulk operations for service lifecycle
     void publishAllConfigs() const;
     void removeAllSensorsForService(const std::string &service);
-    void clearAll();
-
+    void init();
+    void deinit();
+    void poll_event_received(int fd, uint32_t events);
 };
 
 }

@@ -1,8 +1,13 @@
 #include "homeassistant_discovery.h"
 #include "vendor/flashmq_plugin.h"
 #include "utils.h"
+#include <avahi-client/client.h>
+#include <avahi-client/publish.h>
+#include <avahi-common/error.h>
 #include <algorithm>
 #include <ranges>
+#include <sys/time.h>
+#include <link.h>
 
 using namespace dbus_flashmq;
 
@@ -56,6 +61,86 @@ static constexpr std::string_view FLUID_TYPE_VALUE_TEMPLATE = "{% set types = "
                                                               ", 10: 'Hydraulic oil'"
                                                               ", 11: 'Raw water'"
                                                               "} %}{{ types[value_json.value] | default('Unknown (' + value_json.value|string + ')') }}";
+struct HAAvahiClient;
+
+struct AvahiWatch {
+    AvahiWatch(int f, uint32_t e, AvahiWatchCallback c, void *ud, HAAvahiClient &cl)
+        : fd{f}, events{e}, callback{c}, avahiUserdata{ud}, client{cl} { }
+    ~AvahiWatch() { flashmq_poll_remove_fd(fd); }
+
+    void add(AvahiWatchEvent event) {
+        flashmq_poll_add_fd(fd, (uint32_t)event, std::weak_ptr<void>());
+    }
+
+    int fd;
+    uint32_t events;
+    AvahiWatchCallback callback;
+    void *avahiUserdata;
+    HAAvahiClient &client;
+};
+
+struct AvahiTimeout {
+    AvahiTimeout(AvahiTimeoutCallback callback, void *userdata, HAAvahiClient &c)
+        : callback([this, callback, userdata]() { timerid = -1; callback(this, userdata); })
+        , client{c}
+    { }
+    ~AvahiTimeout() { remove(); }
+
+    void add(const struct timeval *tv)
+    {
+        if (tv != NULL) {
+            // calculate a time delta in milliseconds
+            uint32_t delay_in_ms = 0;
+            timeval now;
+            gettimeofday (&now, NULL);
+            if (now.tv_sec > tv->tv_sec || (now.tv_sec == tv->tv_sec && now.tv_usec > tv->tv_usec)) {
+                // Time is in the past, use a delay of 0
+            } else {
+                delay_in_ms = (tv->tv_sec - now.tv_sec) * 1000;
+                delay_in_ms += (tv->tv_usec - now.tv_usec) / 1000;
+            }
+            timerid = flashmq_add_task(callback, delay_in_ms);
+        }
+    }
+    void remove()
+    {
+        if (timerid != uint32_t(-1)) {
+            flashmq_remove_task(timerid);
+            timerid = uint32_t(-1);
+        }
+    }
+    uint32_t timerid = -1;
+    std::function<void()> callback;
+    HAAvahiClient &client;
+};
+
+struct HAAvahiClient : HAAvahiClientWrapper {
+    HAAvahiClient();
+    ~HAAvahiClient() override;
+    void poll_event_received(int fd, uint32_t events) override;
+
+    void queue_reconnect();
+    void disconnect();
+
+    void create_avahi_services(AvahiClient* avahi_client);
+
+    static void avahi_callback(AvahiClient *s, AvahiClientState state, void* userdata );
+    static void avahi_entry_group_callback(AvahiEntryGroup *g, AvahiEntryGroupState state, void *userdata);
+    static AvahiWatch* avahiPoll_watch_new(const AvahiPoll *api, int fd, AvahiWatchEvent event, AvahiWatchCallback callback, void *userdata);
+    static void avahiPoll_watch_update(AvahiWatch *w, AvahiWatchEvent event);
+    static AvahiWatchEvent avahiPoll_watch_get_events(AvahiWatch *w);
+    static void avahiPoll_watch_free(AvahiWatch *w);
+    static AvahiTimeout* avahiPoll_timeout_new(const AvahiPoll *api, const struct timeval *tv, AvahiTimeoutCallback callback, void *userdata);
+    static void avahiPoll_timeout_update(AvahiTimeout *t, const struct timeval *tv);
+    static void avahiPoll_timeout_free(AvahiTimeout *t);
+
+    uint32_t reconnect_timer_id = -1;
+    AvahiClient* avahi_client = nullptr;
+    AvahiEntryGroup *avahi_group = nullptr;
+    std::vector<std::unique_ptr<AvahiWatch>> avahi_watches;
+    std::vector<std::unique_ptr<AvahiTimeout>> avahi_timeouts;
+    AvahiPoll avahi_poll;
+};
 
 static VeVariant getItemValue(const std::unordered_map<std::string, Item> &service_items, std::string_view dbus_path)
 {
@@ -1594,7 +1679,7 @@ void HomeAssistantDiscovery::publishSensorEntitiesWithItems(const std::string &s
                                                             const std::unordered_map<std::string, std::unordered_map<std::string, Item>> &all_items,
                                                             const std::unordered_map<std::string, Item> &changed_items)
 {
-    if (!enabled) {
+    if (!initialised) {
         return;
     }
 
@@ -1634,7 +1719,7 @@ void HomeAssistantDiscovery::publishAllConfigs() const
 
 void HomeAssistantDiscovery::removeAllSensorsForService(const std::string &service)
 {
-    if (!enabled) {
+    if (!initialised) {
         return;
     }
 
@@ -1651,10 +1736,6 @@ void HomeAssistantDiscovery::removeAllSensorsForService(const std::string &servi
 
 void HomeAssistantDiscovery::clearAll()
 {
-    if (!enabled) {
-        return;
-    }
-
     flashmq_logf(LOG_INFO, "Clearing all Home Assistant discovery entities");
 
     for (const auto &device_entry: devices) {
@@ -1662,3 +1743,259 @@ void HomeAssistantDiscovery::clearAll()
     }
     devices.clear();
 }
+
+void HomeAssistantDiscovery::poll_event_received(int fd, uint32_t events)
+{
+    if (avahi_client_wrapper)
+        avahi_client_wrapper->poll_event_received(fd, events);
+}
+
+void HomeAssistantDiscovery::init()
+{
+    flashmq_logf(LOG_NOTICE, "HomeAssistantDiscovery::init");
+    if (!enabled || initialised)
+        return;
+
+    initialised = true;
+    avahi_client_wrapper = std::make_unique<HAAvahiClient>();
+}
+
+void HomeAssistantDiscovery::deinit()
+{
+    if (initialised) {
+        clearAll();
+        avahi_client_wrapper = nullptr;
+    }
+    initialised = false;
+}
+
+HAAvahiClient::HAAvahiClient()
+    : avahi_poll{.userdata = this
+          , .watch_new = avahiPoll_watch_new
+          , .watch_update = avahiPoll_watch_update
+          , .watch_get_events = avahiPoll_watch_get_events
+          , .watch_free = avahiPoll_watch_free
+          , .timeout_new = avahiPoll_timeout_new
+          , .timeout_update = avahiPoll_timeout_update
+          , .timeout_free = avahiPoll_timeout_free
+      }
+{
+    queue_reconnect();
+}
+
+HAAvahiClient::~HAAvahiClient()
+{
+    if (reconnect_timer_id != uint32_t(-1)) {
+        flashmq_logf(LOG_NOTICE, "HAAvahiClient: Removing reconnect timer");
+        flashmq_remove_task(reconnect_timer_id);
+        reconnect_timer_id = -1;
+    }
+
+    disconnect();
+}
+
+void HAAvahiClient::disconnect()
+{
+    if (avahi_client) {
+        flashmq_logf(LOG_NOTICE, "HAAvahiClient: Disconnecting");
+
+        if (avahi_group) {
+            flashmq_logf(LOG_NOTICE, "HAAvahiClient: Removing entry group");
+            avahi_entry_group_free(avahi_group);
+            avahi_group = nullptr;
+        }
+
+        flashmq_logf(LOG_INFO, "HAAvahiClient: Removing avahi client");
+        avahi_client_free(avahi_client);
+        avahi_client = nullptr;
+
+        flashmq_logf(LOG_INFO, "HAAvahiClient: Removing watches and timers");
+        avahi_watches.clear();
+        avahi_timeouts.clear();
+    }
+}
+
+void HAAvahiClient::queue_reconnect()
+{
+    if (reconnect_timer_id != uint32_t(-1)) {
+        flashmq_logf(LOG_NOTICE, "HAAvahiClient: Reconnect already queued");
+        return;
+    }
+
+    flashmq_logf(LOG_NOTICE, "HAAvahiClient: Queueing reconnect");
+    reconnect_timer_id = flashmq_add_task([this](){
+        reconnect_timer_id = -1;
+        flashmq_logf(LOG_NOTICE, "HAAvahiClient: Reconnecting");
+
+        disconnect();
+
+        flashmq_logf(LOG_NOTICE, "HAAvahiClient: Creating new avahi client");
+        int error;
+        avahi_client = avahi_client_new(&avahi_poll, AVAHI_CLIENT_NO_FAIL, avahi_callback, this, &error);
+        if (!avahi_client) {
+            flashmq_logf(LOG_ERR, "HAAvahiClient: avahi_client_new failure: %s", avahi_strerror(error));
+        }
+    }, 0);
+}
+
+void HAAvahiClient::avahi_callback(AvahiClient *s, AvahiClientState state, void* userdata)
+{
+    flashmq_logf(LOG_INFO, "HAAvahiClient::avahi_callback: %X", state);
+    HAAvahiClient &client = *static_cast<HAAvahiClient *>(userdata);
+    /* Take care! client.avahi_client might not be set yet at this point!! */
+    /* Called whenever the client or server state changes */
+    switch (state) {
+    case AVAHI_CLIENT_S_RUNNING:
+        /* The server has startup successfully and registered its host
+         * name on the network, so it's time to create our services */
+        client.create_avahi_services(s);
+        break;
+    case AVAHI_CLIENT_FAILURE:
+    {
+        int avahi_errno = avahi_client_errno(s);
+        flashmq_logf(LOG_ERR, "HAAvahiClient: avahi_callback: Client failure: %d => %s", avahi_errno, avahi_strerror(avahi_errno));
+        client.queue_reconnect();
+        break;
+    }
+    case AVAHI_CLIENT_S_COLLISION:
+        /* Let's drop our registered services. When the server is back
+         * in AVAHI_SERVER_RUNNING state we will register them
+         * again with the new host name. */
+    case AVAHI_CLIENT_S_REGISTERING:
+        /* The server records are now being established. This
+         * might be caused by a host name change. We need to wait
+         * for our own records to register until the host name is
+         * properly esatblished. */
+        if (client.avahi_group) {
+            flashmq_logf(LOG_INFO, "HAAvahiClient: avahi_callback: Resetting entry group");
+            avahi_entry_group_reset(client.avahi_group);
+        }
+        break;
+    case AVAHI_CLIENT_CONNECTING:
+        ;
+    }
+}
+
+void HAAvahiClient::create_avahi_services(AvahiClient* avahi_client)
+{
+    /* avahi_client hides the avahi_client member, but this is intentional. This function can be called in a callback that is already called while
+     * the AvahiClient is being constructed, so the avahi_client might not be set. By having it as parameter, the caller is forced to provide
+     * the correct AvahiClient point. */
+
+    static const char name[] = "HADiscovery";
+    int ret;
+
+    /* If this is the first time we're called, let's create a new
+     * entry group if necessary */
+    if (!avahi_group) {
+        avahi_group = avahi_entry_group_new(avahi_client, avahi_entry_group_callback, this);
+        if (!avahi_group) {
+            flashmq_logf(LOG_ERR, "HAAvahiClient: avahi_entry_group_new() failed: %s\n", avahi_strerror(avahi_client_errno(avahi_client)));
+            goto fail;
+        }
+    }
+
+    /* If the group is empty (either because it was just created, or
+     * because it was reset previously, add our entries.  */
+    if (avahi_entry_group_is_empty(avahi_group)) {
+        flashmq_logf(LOG_INFO, "create_avahi_services: Adding service '%s'", name);
+        if ((ret = avahi_entry_group_add_service(avahi_group, AVAHI_IF_UNSPEC, AVAHI_PROTO_UNSPEC, AvahiPublishFlags(0), name, "_venus_mqtt_ha._tcp", NULL, NULL, 9001, NULL)) < 0) {
+            if (ret == AVAHI_ERR_COLLISION) {
+                flashmq_logf(LOG_WARNING, "HAAvahiClient: create_avahi_services: collission");
+                goto collision;
+            }
+            flashmq_logf(LOG_ERR, "HAAvahiClient: create_avahi_services: Failed to add service: '%s'", avahi_strerror(ret));
+            goto fail;
+        }
+        /* Tell the server to register the service */
+        if ((ret = avahi_entry_group_commit(avahi_group)) < 0) {
+            flashmq_logf(LOG_ERR, "HAAvahiClient: create_avahi_services: Failed to commit entry group: '%s'", avahi_strerror(ret));
+            goto fail;
+        }
+    }
+collision:
+fail:
+    return;
+
+}
+
+void HAAvahiClient::avahi_entry_group_callback(AvahiEntryGroup */*g*/, AvahiEntryGroupState state, void */*userdata*/)
+{
+    flashmq_logf(LOG_INFO, "HAAvahiClient: avahi_entry_group_callback: %X", state);
+    switch (state) {
+    case AVAHI_ENTRY_GROUP_ESTABLISHED :
+        /* The entry group has been established successfully */
+        // fprintf(stderr, "Service '%s' successfully established.\n", name);
+        break;
+    case AVAHI_ENTRY_GROUP_COLLISION : {
+        break;
+    }
+    case AVAHI_ENTRY_GROUP_FAILURE :
+        // fprintf(stderr, "Entry group failure: %s\n", avahi_strerror(avahi_client_errno(avahi_entry_group_get_client(g))));
+        /* Some kind of failure happened while we were registering our services */
+        break;
+    case AVAHI_ENTRY_GROUP_UNCOMMITED:
+    case AVAHI_ENTRY_GROUP_REGISTERING:
+        ;
+    }
+}
+
+void HAAvahiClient::poll_event_received(int fd, uint32_t events)
+{
+    for (auto &watch : avahi_watches) {
+        if (watch->fd == fd) {
+            AvahiWatchEvent avahi_events = AvahiWatchEvent(events);
+            watch->events = events;
+            watch->callback(watch.get(), fd, avahi_events, watch->avahiUserdata);
+            break;
+        }
+    }
+}
+
+AvahiWatch * HAAvahiClient::avahiPoll_watch_new(const AvahiPoll *api, int fd, AvahiWatchEvent event, AvahiWatchCallback callback, void *userdata)
+{
+    HAAvahiClient &client = *static_cast<HAAvahiClient *>(api->userdata);
+    auto & watch = client.avahi_watches.emplace_back(std::make_unique<AvahiWatch>(fd, 0, callback, userdata, client));
+    watch->add(event);
+    return watch.get();
+}
+
+void HAAvahiClient::avahiPoll_watch_update(AvahiWatch *watch, AvahiWatchEvent event) {
+    watch->add(event);
+};
+
+AvahiWatchEvent HAAvahiClient::avahiPoll_watch_get_events(AvahiWatch *watch) {
+    return AvahiWatchEvent(watch->events);
+};
+
+void HAAvahiClient::avahiPoll_watch_free(AvahiWatch *watch) {
+    auto & avahi_watches = watch->client.avahi_watches;
+    for (auto pos = avahi_watches.begin(); pos != avahi_watches.end(); ++pos) {
+        if (pos->get() == watch) {
+            avahi_watches.erase(pos);
+            return;
+        }
+    }
+};
+
+AvahiTimeout * HAAvahiClient::avahiPoll_timeout_new(const AvahiPoll *api, const struct timeval *tv, AvahiTimeoutCallback callback, void *userdata) {
+    HAAvahiClient &client = *static_cast<HAAvahiClient *>(api->userdata);
+    auto & timeout = client.avahi_timeouts.emplace_back(std::make_unique<AvahiTimeout>(callback, userdata, client));
+    timeout->add(tv);
+    return timeout.get();
+};
+
+void HAAvahiClient::avahiPoll_timeout_update(AvahiTimeout *timeout, const struct timeval *tv) {
+    timeout->remove();
+    timeout->add(tv);
+};
+
+void HAAvahiClient::avahiPoll_timeout_free(AvahiTimeout *timeout) {
+    auto & avahi_timeouts = timeout->client.avahi_timeouts;
+    for (auto pos = avahi_timeouts.begin(); pos != avahi_timeouts.end(); ++pos) {
+        if (pos->get() == timeout) {
+            avahi_timeouts.erase(pos);
+            return;
+        }
+    }
+};

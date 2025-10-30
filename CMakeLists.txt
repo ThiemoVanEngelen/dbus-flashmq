@@ -19,6 +19,7 @@ include(GNUInstallDirs)
 find_package(PkgConfig REQUIRED)
 
 pkg_check_modules(DBUS REQUIRED IMPORTED_TARGET dbus-1)
+pkg_check_modules(AVAHI REQUIRED IMPORTED_TARGET avahi-client)
 
 add_library(flashmq-dbus-plugin SHARED
   vendor/json.hpp
@@ -80,12 +81,11 @@ add_executable(flashmq-dbus-plugin-tests
   src/homeassistant_discovery.h src/homeassistant_discovery.cpp
 )
 
-target_include_directories(flashmq-dbus-plugin PUBLIC ${DBUS_INCLUDE_DIRS} .)
-target_include_directories(flashmq-dbus-plugin-tests PUBLIC ${DBUS_INCLUDE_DIRS} .)
+target_include_directories(flashmq-dbus-plugin PUBLIC ${DBUS_INCLUDE_DIRS} ${AVAHI_INCLUDE_DIRS} .)
+target_include_directories(flashmq-dbus-plugin-tests PUBLIC ${DBUS_INCLUDE_DIRS} ${AVAHI_INCLUDE_DIRS} .)
 
-target_link_libraries(flashmq-dbus-plugin pthread dbus-1 resolv crypt)
-
-target_link_libraries(flashmq-dbus-plugin-tests pthread dbus-1 resolv crypt)
+target_link_libraries(flashmq-dbus-plugin pthread resolv crypt ${DBUS_LIBRARIES} ${AVAHI_LIBRARIES})
+target_link_libraries(flashmq-dbus-plugin-tests pthread resolv crypt ${DBUS_LIBRARIES} ${AVAHI_LIBRARIES})
 
 install(TARGETS flashmq-dbus-plugin-tests RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(TARGETS flashmq-dbus-plugin DESTINATION "${CMAKE_INSTALL_LIBEXECDIR}/flashmq")
