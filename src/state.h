@@ -15,6 +15,7 @@
 #include <set>
 #include "serviceidentifier.h"
 #include "network.h"
+#include "homeassistant_discovery.h"
 
 #include "vendor/flashmq_plugin.h"
 
@@ -135,6 +136,9 @@ struct State
 
     std::vector<Network> local_nets;
 
+    // Home Assistant Discovery
+    dbus_flashmq::HomeAssistantDiscovery ha_discovery;
+
     State();
     ~State();
     void add_dbus_to_mqtt_mapping(const std::string &serivce, std::unordered_map<std::string, Item> &items, bool instance_must_be_known, bool force_publish=false);
@@ -172,6 +176,10 @@ struct State
     void clear_expired_privileged_clients();
     bool localhost_client(const std::weak_ptr<Client> &client) const;
     IsPrivilegedUser is_privileged_user(const std::string &clientid, const std::string &username) const;
+
+    // Home Assistant Discovery methods
+    void init_home_assistant_discovery();
+    void configure_home_assistant_discovery(const std::unordered_map<std::string, std::string> &plugin_opts);
 };
 
 }

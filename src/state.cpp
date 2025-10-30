@@ -115,6 +115,11 @@ void State::add_dbus_to_mqtt_mapping(const std::string &service, std::unordered_
         add_dbus_to_mqtt_mapping(service, device_instance, item, force_publish);
     }
 
+    // Home Assistant Discovery integration
+    if (ha_discovery.isEnabled()) {
+        ha_discovery.publishSensorEntitiesWithItems(service, s, dbus_service_items, items);
+    }
+
     attempt_to_process_delayed_changes();
 }
 
@@ -372,6 +377,7 @@ ServiceIdentifier State::store_and_get_instance_from_service(const std::string &
  *
  *  { "keepalive-options" : [ "suppress-republish" ] }
  *  { "keepalive-options" : [ {"full-publish-completed-echo": "B9FMlGWoCcfMKc" } ] }
+ *  { "keepalive-options" : [ "ha-config-publish" ] }
  *
  * The payload was previsouly used for selecting only certain topics. We are probably not going to support that functionality. But
  * Note that that format was an array of topics, not a dict with keys. That kind of limited supporting other things with it. That's why
@@ -410,6 +416,10 @@ void State::handle_keepalive(const std::string &payload)
                         if (el.is_object())
                         {
                             payload_echo = el["full-publish-completed-echo"];
+                        }
+                        if (el.is_string() && el.get<std::string>() == "ha-config-publish")
+                        {
+                            ha_discovery.publishAllConfigs();
                         }
                     }
                 }
@@ -856,6 +866,11 @@ void State::scan_dbus_service(const std::string &service)
 
 void State::remove_dbus_service(const std::string &service)
 {
+    // Handle HA Discovery cleanup before removing the service data
+    if (ha_discovery.isEnabled()) {
+        ha_discovery.removeAllSensorsForService(service);
+    }
+
     {
         auto pos = dbus_service_items.find(service);
         if (pos != dbus_service_items.end())
@@ -975,7 +990,6 @@ bool BridgeConnectionState::operator==(const BridgeConnectionState &other) const
     return msg == other.msg && connected == other.connected;
 }
 
-
 void State::clear_expired_privileged_clients()
 {
     for (auto _ = this->privileged_network_clients.begin(); _ != this->privileged_network_clients.end();)
@@ -1041,4 +1055,41 @@ IsPrivilegedUser State::is_privileged_user(const std::string &clientid, const st
 const std::weak_ptr<Client> &IsPrivilegedUser::get_client() const
 {
     return this->client;
+}
+
+void State::init_home_assistant_discovery()
+{
+    ha_discovery.setVrmId(unique_vrm_id);
+    flashmq_logf(LOG_INFO, "Home Assistant Discovery initialized with VRM ID: %s", unique_vrm_id.c_str());
+}
+
+void State::configure_home_assistant_discovery(const std::unordered_map<std::string, std::string> &plugin_opts)
+{
+    // Check if Home Assistant discovery is enabled
+    auto ha_enable_pos = plugin_opts.find("homeassistant_discovery");
+    if (ha_enable_pos != plugin_opts.end() && ha_enable_pos->second == "true") {
+        ha_discovery.setEnabled(true);
+
+        // Check for custom discovery prefix
+        auto ha_prefix_pos = plugin_opts.find("homeassistant_discovery_prefix");
+        if (ha_prefix_pos != plugin_opts.end()) {
+            ha_discovery.setDiscoveryPrefix(ha_prefix_pos->second);
+        }
+
+        // Configure which services to include (optional filtering)
+        auto services_pos = plugin_opts.find("homeassistant_services");
+        if (services_pos != plugin_opts.end()) {
+            // Parse comma-separated list: "temperature,battery,solarcharger"
+            std::vector<std::string> enabled_services = splitToVector(services_pos->second, ',', std::numeric_limits<int>::max(), false);
+            ha_discovery.setEnabledServices(enabled_services);
+            flashmq_logf(LOG_INFO, "Home Assistant Discovery enabled for services: %s", services_pos->second.c_str());
+        } else {
+            flashmq_logf(LOG_INFO, "Home Assistant Discovery enabled for all supported services");
+        }
+
+        flashmq_logf(LOG_INFO, "Home Assistant Discovery enabled with prefix: %s",
+                     ha_discovery.getDiscoveryPrefix().c_str());
+    } else {
+        flashmq_logf(LOG_INFO, "Home Assistant Discovery disabled");
+    }
 }
